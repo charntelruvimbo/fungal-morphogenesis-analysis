@@ -1,0 +1,965 @@
+---
+title: "Activity of Plant Origin Compounds on Fungal Morphogenesis: A Hypothesis-Driven Statistical Analysis"
+author: "Charntel Kazingizi, Rongrong Qian"
+date: "2025-11-08"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: bootstrap
+    number_sections: true
+    toc_depth: 3   
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(janitor)
+library(emmeans)
+library(sandwich)
+library(MASS)
+```
+
+# Introduction
+
+Candida albicans is an opportunistic human fungal pathogen whose virulence is intrinsically linked to its morphological plasticity. The transition from a unicellular yeast form to a filamentous hyphal form is a critical determinant of pathogenesis, enabling tissue invasion and the formation of resilient biofilms. Given the markedly limited availability of safe and effective systemic antifungal agents, there is an urgent need to identify and validate novel inhibitory compounds. This study investigates the potential of plant-origin compounds derived from Aloe arborescens to serve this role.
+
+The primary objective of this project is to statistically evaluate the efficacy of seven distinct treatments in inhibiting the morphogenic transition of C. albicans. The experimental groups include a 0.2 micron filtered A. arborescens extract, isolated compounds ('A' and 'B'), their commercially purchased counterparts ('A-SA' and 'B-SA' from Sigma-Aldrich), and combinations thereof.
+
+This report analyzes data from a morphogenesis assay where C. albicans cells were exposed to each treatment. For each of the seven groups, five replicates were conducted, and 200 cells per replicate were microscopically assessed and categorized based on their morphological state (e.g., presence of bud, pseudohypha, or hypha tube). The primary response variable for this analysis is the proportion of cells forming hyphae, as this is the key marker for virulence.
+
+The statistical analysis will test the following core research hypotheses:
+
+1. Whether exposure to each of the seven experimental treatments results in a statistically significant reduction in hyphae formation compared to non-exposed control cells.
+
+2. Whether treatments utilizing Compound 'A' (isolated and commercial) result in greater reductions in hyphae formation compared to treatments utilizing Compound 'B' (isolated and commercial).
+
+3. Whether the 0.2 micron filtered Aloe arborescens extract treatment results in the greatest reduction in hyphae formation compared to the other six experimental treatments.
+
+
+
+# Methods
+
+## Data
+```{r data, echo=FALSE, message=FALSE}
+# Please change the path to the dataset on your local machine
+data_path <- "C:\\Users\\charn\\Desktop\\MY PROJECTS\\Activity of Plant Origin Compounds on Fungal Morphogenesis\\LeeDataFungalMorphogenesis.csv"
+raw <- read_csv(data_path, show_col_types = FALSE)
+#head(raw)
+```
+
+This dataset contains the observational counts of Candida albicans cell morphologies under eight experimental conditions (one positive control and seven experimental treatments).
+
+This is essentially prevalence data. For each of the five biological replicates per treatment group, a fixed number of Candida albicans cells ($n=200$ cells) was drawn and observed under a microscope. The dataset records the frequency (counts) of each specific morphology (hyphae, pseudohyphae, buds, etc.) observed within those 200 cells.
+
+### Data Structure
+Each row in the dataset represents an independent observational unit (one replicate experiment). Given 8 treatment groups (including the control) and 5 replicates per group, the dataset comprises 40 observational rows.
+
+### Variable Definitions
+The data file includes the following key variables:
+
+- `Treatment`: A categorical variable identifying the experimental condition applied to the cells. It has 8 levels, including "No Treatment (control group)" and the seven Aloe arborescens related treatments.
+
+- `Replicate`: A categorical variable identifying the biological replicate within a treatment group ($1, 2, 3, 4, 5$).
+
+- `Slide (tube) # (for use in lab)`: A laboratory identifier for the sample, not used as a variable in this statistical analysis.
+
+Response Variables (Count Data): The following 8 variables are mutually exclusive categories. They record the observed count ($k_i$) for each morphology out of the $n=200$ cells. Therefore, for each row, the sum of these counts $\sum k_i = 200$.
+
+- `Response: No change in morphology (No GT, PH or buds)`: No morphological change.
+
+- `Response: GT (germ tubes) only`: Only germ tubes (hyphae) formed.
+
+- `Response: Pseudohypha (PH) only`: Only pseudohyphae formed.
+
+- `Response: Buds only`: Only buds formed.
+
+- `Response: GT + PH`: Both germ tubes and pseudohyphae formed.
+
+- `Response: GT + Buds`: Both germ tubes and buds formed.
+
+- `Response: PH + Buds`: Both pseudohyphae and buds formed.
+
+- `Response: >1 GTs multiple GTs)`: More than one germ tube formed.
+
+
+
+
+
+
+```{r clean_data, echo=FALSE, message=FALSE}
+# clean data
+# Rename columns
+new_names <- c(
+  "treatment","replicate","slide_id",
+  "no_change","gt_only","ph_only","bud_only",
+  "gt_ph","gt_bud","ph_bud","gt_multi"
+)
+
+# calculate total cells and hyphae proportion
+dat <- raw %>%
+  rename_with(~ new_names, .cols = 1:11) %>%
+  mutate(
+    treatment = factor(treatment,
+      levels = c(
+        "No Treatment (positive control)",           
+        "Whole Aloe arborescens Extract",             
+        "compound 'A' isolated from Aloe arborescens",
+        "compound 'A-SA' from Sigma Aldrich",
+        "compound 'B' isolated from Aloe arborescens",
+        "compound 'B-SA' from Sigma Aldrich",
+        "combination of A and B",
+        "combination of A-SA and B-SA"
+      )),
+    across(no_change:gt_multi, as.integer),
+    total_cells  = no_change + gt_only + ph_only + bud_only + gt_ph + gt_bud + ph_bud + gt_multi,
+    hyphae_count = gt_only + gt_ph + gt_bud + gt_multi,
+    hyphae_prop  = hyphae_count / total_cells
+  )
+
+ctrl_name   <- "No Treatment (positive control)"
+extract_name<- "Whole Aloe arborescens Extract"
+
+```
+
+## Statistical Analysis 
+
+### Overall Experimental Design
+
+The experimental design is a completely randomized design (CRD) with eight treatment groups (including the control) and five biological replicates per group. Each replicate involves observing 200 cells under a microscope and recording the counts of each morphology type.
+
+### Modeling Approach
+
+**The response variable ($Y_i$) for each replicate $i$ is the count of hyphae forming cells observed**. These counts are derived from a standard sample size of $n_i = 200$ cells, which is drawn from a much larger population in each tube. The hyphae counts were modeled using a Quasi-Poisson generalized linear model (GLM).
+
+**1. Distributional Assumption**
+
+The model assumes that given an underlying true hyphae formation rate $r_i$ for that replicate, the observed count $Y_i$ follows a Poisson distribution:
+
+$$
+Y_i \mid r_i \sim \text{Poisson}(\mu_i)\tag{1}
+$$
+
+Where:
+
+- $\mu_i$ is the expected count ($E[Y_i]$) for replicate $i$. ($\mu_i = r_i \times n_i$)\
+- $r_i$ is the true underlying rate of hyphae formation for replicate $i$.
+
+
+$$
+r_i = \frac{\text{Count of GT only} + \text{Count of GT & PH} + \text{Count of GT & Buds} + \text{Count of >1 GTs}}{n_i}\tag{2}
+$$
+
+
+
+**2. Model Structure: Log Link and Offset**
+
+A log link function was used to model the expected count $\mu_i$ to a linear predictor. 
+$$
+\log(\mu_i) = \eta_i + \log(n_i)\tag{3}
+$$
+
+Where:
+
+- $\eta_i$ is the linear predictor for replicate $i$.\
+- $\log(n_i)$ is the offset term, accounting for the fixed sample size of 200 cells per replicate.
+
+
+**3. The Linear Predictor (Modeling the Rate)**
+
+The model's linear predictor, $\eta_i$, is used to model the $\log(r_i)$ ($\eta_i = \log(r_i)$), based on the explanatory variables:
+
+$$
+\eta_i = \log(r_i) = \beta_0 + \beta_1 X_{1i} + \dots + \beta_p X_{pi}\tag{4}
+$$
+
+Where:
+
+- $\beta_0$ is the intercept term. It represents the log rate for the reference group (Control).\
+- $\beta_j$ are the coefficients for each predictor variable $X_{ji}$ (treatment indicators).\
+- $X_{ji}$ are indicator variables for the treatment groups ( $X_{ji}$ = 1 if replicate $i$ is in treatment group $j$, else 0).\
+- $p$ is the total number of predictor variables (treatment groups minus one for the reference).
+- Other variables are shown above.
+
+
+By exponentiating the linear predictor, the model directly estimates the hyphae rate ($r_i$) as:
+
+$$
+r_i = \exp(\eta_i) = \exp(\beta_0 + \beta_1 X_{1i} + \dots + \beta_p X_{pi})\tag{5}
+$$
+
+**4. Interpretation as Rate Ratios**
+
+This model specification is powerful because it provides a direct interpretation for the coefficients. By exponentiating a coefficient $\beta_j$, we obtain the Rate Ratio (RR).
+
+$$
+\text{Rate Ratio (RR)} = \exp(\beta_j)\tag{6}
+$$
+
+This value represents the multiplicative change in the hyphae formation rate for each one unit increase in the corresponding predictor $X_j$, holding all other variables constant. For example, if $X_1$ represents a specific treatment and $\exp(\beta_1) = 1.5$, it implies the rate of hyphae formation for that treatment is 1.5 times the rate of the reference group.
+
+
+
+### Modeling Overdispersion
+
+The standard Poisson model assumes the variance equals the mean ($\text{Var}(Y_i) = \mu_i$). However, biological count data frequently exhibit overdispersion, where the observed variance is greater than the mean. Ignoring this overdispersion by using a standard Poisson model can lead to underestimated standard errors and inflated statistical significance.
+
+Therefore, after fitting the initial Poisson model, a check for overdispersion will be conducted by calculating the ratio of the residual deviance to the residual degrees of freedom. If this ratio exceeds 1, indicating overdispersion, a quasi-Poisson model will be fitted instead. The quasi-Poisson approach adjusts the standard errors to account for the extra variability, ensuring valid inference.
+
+### Quasi-Poisson GLM
+
+Quasi-Poisson GLM model retains the mean structure and log link of the Poisson model:
+$$
+\log(E[Y_i]) = \eta_i + \log(n_i)\tag{7}
+$$
+
+However, it introduces a dispersion parameter, $\phi$, to model the variance as a proportional function of the mean:
+$$
+\text{Var}(Y_i) = \phi \times \mu_i\tag{8}
+$$
+
+The dispersion parameter $\phi$ is estimated from the data using the residual deviance. If $\phi > 1$, it confirms overdispersion. This model adjusts the standard errors of the estimated coefficients (by a factor of $\sqrt{\phi}$) to provide more conservative and reliable p-values, correcting for the excess variability.
+
+
+
+
+### Hypothesis Testing and Contrasts
+
+The following three core hypotheses will be formally tested using the GLM framework:
+
+**H1: Efficacy of Treatments versus Control**
+
+- **Objective:** To determine if the seven treatment groups exhibit a significantly lower outcome mean compared to the control group.\
+- **Statistical Test:** A one-sided Dunnett's multiple comparison test will be employed, treating the 'Control' group as the reference.\
+- **Contrasts:** 7 one-sided hypotheses will be tested, comparing each treatment group to the control.\
+
+$$
+\begin{array}{l}
+H_{0, i}: r_{\text{trt}, i} \geq r_{\text{Control}} \quad (\text{or } \text{Rate Ratio} \geq 1) \\
+H_{a, i}: r_{\text{trt}, i} < r_{\text{Control}} \quad (\text{or } \text{Rate Ratio} < 1 ) \\
+\text{for } i = 1, \dots, 7
+\end{array}
+\tag{9}
+$$
+
+Where:
+
+- `trt i` represents each of the seven treatment groups.\
+- `Control` represents the untreated control group.
+
+
+**H2: Main Effect of Component (A vs. B)**
+
+- **Objective:** To test the main effect of 'Component' (A vs. B) by averaging across the 'Source' factor (Aloe vs. SA). The specific hypothesis is that Component A results in a significantly lower mean than Component B.\
+- **Design:** This analysis focuses on the 2x2 factorial substructure, comprising four treatment groups: A_Aloe, A_SA, B_Aloe, and B_SA.\
+- **Statistical Test:** A custom contrast on the log rate scale will be constructed and tested.\
+- **Contrast:** 
+
+
+$$
+C_{H2} = \frac{1}{2}(\eta_{A, Aloe} + \eta_{A, SA}) - \frac{1}{2}(\eta_{B, Aloe} + \eta_{B, SA})\tag{10}
+$$
+
+Where:
+
+- $\eta_{A, Aloe}$: Mean log rate for Compound A isolated from Aloe.\
+- $\eta_{A, SA}$: Mean log rate for Compound A from Sigma Aldrich.\
+- $\eta_{B, Aloe}$: Mean log rate for Compound B isolated from Aloe.\
+- $\eta_{B, SA}$: Mean log rate for Compound B from Sigma Aldrich.
+
+The corresponding one-sided null hypothesis is $H_0: C_{H2} \geq 0$ and the alternative hypothesis is $H_a: C_{H2} < 0$.
+
+- **Implementation:** This test will be implemented using custom contrast weights ( [0.5, 0.5, -0.5, -0.5]) via the emmeans package. 
+
+
+**H3: Efficacy of Whole Extract versus Other Treatments**
+
+- **Objective:** Test whether the 0.2 μm filtered Aloe arborescens whole extract achieves the lowest hyphae formation rate among the seven experimental treatments.\
+- **Statistical Test:** The control group is kept in the model but is not part of this H3 family of comparisons. A one-sided Dunnett's multiple comparison test will be conducted, establishing the 'Extract' group as the reference for comparison.\
+- **Contrasts:** 6 one-sided, many-to-one contrasts will be tested, each comparing a non-Extract treatment to the Extract reference, with family-wise error controlled via Dunnett’s adjustment.
+
+
+$$
+\begin{array}{l}
+H_{0, j}: r_{\text{Group}, j} \leq r_{\text{Extract}} \quad (\text{or } \text{Rate Ratio} \leq 1)\\
+H_{a, j}: r_{\text{Group}, j} > r_{\text{Extract}} \quad (\text{or } \text{Rate Ratio} > 1) \\
+\text{for } j = 1, \dots, 6
+\end{array}
+\tag{11}
+$$
+
+
+Where:
+
+  - `Group j` represents each of the other 6 groups.\
+  - `Extract` represents the whole Aloe arborescens extract group.
+
+### Effect Size Metrics
+
+The primary effect size metric will be the Rate Ratio (RR) for hyphae formation, comparing each treatment group to the specified reference (Control for H1, Extract for H3).
+
+Family-wise error rate (FWER) adjusted p-values and 95% confidence intervals for the RRs will be reported to assess the precision and significance of the estimates.
+
+### Model Diagnostics
+
+Model diagnostics will include: 
+
+Model diagnostics will be performed to ensure all model assumptions are met.
+
+- **Overdispersion check:** The dispersion parameter ($\phi$) from the Quasi-Poisson model fit will be inspected. If $\phi$ is substantially greater than 1, it confirms overdispersion and validates the use of the Quasi-Poisson or Negative Binomial models.
+
+- **Goodness-of-fit assessment:** Pearson residuals and Deviance residuals will be examined for patterns, outliers, and overall model fit.
+
+
+## Software
+The data analysis and visualization were performed using `R (version 4.5.1)` and `RStudio (version 2025.09.2+418)`. Data import, wrangling, and visualization were conducted primarily using the `tidyverse` suite of packages (including `ggplot2`, `dplyr`, and `readr`), supplemented by `janitor` for data cleaning. Statistical models were fitted using the `MASS` package. Estimated marginal means were calculated via the `emmeans` package, and robust covariance matrix estimators were computed using the `sandwich` package. Tables were formatted for publication using `knitr` and `kableExtra`.
+
+
+# Results
+
+## Exploratory Data Analysis Results
+
+### Stacked Bar Chart of Morphological Response Types by Treatment
+
+This figure presents the distribution of morphological response types across individual treatments. It highlights the relative proportions of each morphological form (e.g germ tubes, pseudohyphae, buds, or no change) observed under each treatment. Our goal is to visualize how different compounds whether plant-derived or commercially sourced affect the morphological development of the organism.
+
+```{r, echo=FALSE, message=FALSE, fig.width=12, fig.height=10}
+# Preparing the  data
+plot_data <- dat %>%
+  dplyr::select(all_of(c(
+    "treatment", "replicate", "slide_id",
+    "no_change", "bud_only", "ph_only", "ph_bud",
+    "gt_only", "gt_bud", "gt_ph", "total_cells"
+  ))) %>%
+  tidyr::pivot_longer(
+    cols = c("no_change", "bud_only", "ph_only", "ph_bud", "gt_only", "gt_bud", "gt_ph"),
+    names_to = "response",
+    values_to = "count"
+  ) %>%
+  group_by(treatment, response) %>%
+  summarise(
+    total = sum(count, na.rm = TRUE),
+    total_cells = sum(unique(total_cells)),
+    .groups = "drop"
+  ) %>%
+  mutate(proportion = total / total_cells)
+
+# Defining the  response order
+response_levels <- c("no_change", "bud_only", "ph_only",
+                     "ph_bud", "gt_only", "gt_bud", "gt_ph")
+plot_data$response <- factor(plot_data$response, levels = response_levels)
+
+# Custom colors
+response_colors <- c(
+  "no_change" = "#A1D7E3",
+  "bud_only"  = "#00BFFF", 
+  "ph_only"   = "#A0C4FF",
+  "ph_bud"    = "#406A93",
+  "gt_only"   = "#FDB462",
+  "gt_bud"    = "#FB8072",
+  "gt_ph"     = "#E31A1C"
+)
+
+
+
+# Plot
+ggplot(plot_data, aes(x = treatment, y = proportion, fill = response)) +
+  geom_bar(stat = "identity", position = "fill", color = "white", width = 0.8) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(
+    name = "Morphological Response",
+    values = response_colors,
+    labels = c("No change", "Buds only", "PH only",
+               "PH + Buds", "GT only", "GT + Buds", "GT + PH")
+  ) +
+  labs(
+    title = "Figure 1: Stacked Bar Chart of Morphological Response Types by Treatment",
+    x = "",
+    y = "Proportion of Cells"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+```
+
+
+From Figure 1, the No Treatment (positive control) group shows predominantly germ tube (GT) formation, indicating normal hyphal development in the absence of inhibitory agents. In contrast, all treatment conditions (both individual compounds and their combinations) show a marked increase in the proportion of cells exhibiting no morphological change, suggesting that these treatments effectively inhibited germ tube and pseudohypha formation. Among treatments, the Whole Aloe arborescens extract and the combinations of compounds A and B show the strongest inhibitory effects, with nearly all cells remaining in the “no change” state. Minor occurrences of buds only and pseudohyphae (PH) are observed under certain compound treatments, indicating partial morphological responses. Overall, this figure makes it clear that the morphological distribution is strongly dependent on the treatment type.
+
+
+
+
+### Hyphae Proportion Summary by Treatment
+
+```{r}
+# Replicate-level summary (mean, SD, Min, Max) for hyphae proportion
+hyph_summ_repl <- dat %>%
+  group_by(treatment) %>%
+  summarise(
+    n_repl   = n(),
+    mean_prop= mean(hyphae_prop), # mean of replicate-level proportions
+    sd_prop  = sd(hyphae_prop), # SD across replicates
+    min_prop = min(hyphae_prop),
+    max_prop = max(hyphae_prop),
+    .groups = "drop"
+  )
+
+hyph_summ_repl_disp <- hyph_summ_repl %>%
+  transmute(
+    Treatment = treatment,
+    `n (replicates)` = n_repl,
+    Mean = sprintf("%.3f", mean_prop),
+    SD   = sprintf("%.3f", sd_prop),
+    Min  = sprintf("%.3f", min_prop),
+    Max  = sprintf("%.3f", max_prop)
+  )
+
+hyph_summ_repl_disp %>%
+  kable(caption = "Table 1: Hyphae Proportion by Treatment (replicate-level, mean ± SD, min, max)",
+        align = "l") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+Table 2 presents the descriptive statistics for the hyphae proportions, based on five biological replicates per treatment.
+
+The mean observed proportions confirm the strong inhibitory patterns. The No Treatment (positive control) group exhibited a high mean proportion of 0.850. In sharp contrast, all seven treatment groups showed substantially lower mean proportions, ranging from a minimum of 0.030 (Whole Aloe arborescens Extract) to a maximum of 0.249 (compound 'B-SA' from Sigma Aldrich).
+
+Furthermore, the low standard deviations (SD $\le$ 0.050) across all groups indicate a high degree of consistency among replicates. These summary data provide strong quantitative support for the primary hypotheses: the clear separation between the control (0.850) and all treatment groups (all $\le$ 0.249) supports Hypothesis 1, while the uniquely low mean of the Extract (0.030) supports Hypothesis 3.
+
+
+```{r shorten_labels, echo=FALSE, message=FALSE}
+# shorten treatment labels (readable but shorter)
+trt_levels_long <- c(
+  "No Treatment (positive control)",
+  "Whole Aloe arborescens Extract",
+  "compound 'A' isolated from Aloe arborescens",
+  "compound 'A-SA' from Sigma Aldrich",
+  "compound 'B' isolated from Aloe arborescens",
+  "compound 'B-SA' from Sigma Aldrich",
+  "combination of A and B",
+  "combination of A-SA and B-SA"
+)
+
+trt_labels_short <- c(
+  "No Trt (Ctrl)",
+  "Whole Aloe Extract",
+  "A (Aloe)",
+  "A-SA (Company)",
+  "B (Aloe)",
+  "B-SA (Company)",
+  "A + B (Aloe)",
+  "A-SA + B-SA"
+)
+```
+
+
+
+
+### Hyphae Proportion by Treatment with Replicates and Mean
+
+```{r Dotplot, echo=FALSE, message=FALSE, fig.width=20, fig.height=8}
+# Prepare data for plotting
+plot_df <- dat %>% 
+  mutate(hyphae_pct = 100 * hyphae_prop)
+
+plot_df2 <- plot_df %>%
+  mutate(
+    # map long names to short labels
+    treatment = factor(treatment, levels = trt_levels_long, labels = trt_labels_short)
+  )
+
+# Dotplot with mean hash marks
+p_dot <- ggplot(plot_df2, aes(x = treatment, y = hyphae_pct)) +
+  geom_jitter(width = 0.2, size = 5, alpha = 0.6, color = "steelblue") +  
+  stat_summary(fun = mean, geom = "crossbar", width = 0.5, color = "red", linewidth = 0.8) +  
+  labs(x = NULL, y = "Hyphae %", 
+       title = "Figure 2: Hyphae % by Treatment with Replicates and Mean") +
+  theme_minimal(base_size = 22) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0, size = 30)
+  )
+
+print(p_dot)
+
+```
+
+
+Figure 2 presents the raw hyphae formation percentage for all eight groups. A distinct separation is immediately visible between the No Treatment (Control) group (hyphae % > 75%) and all seven active treatment groups (hyphae % < 35%), providing strong visual support for Hypothesis 1. Preliminary visual evidence for Hypothesis 2 is also apparent: groups containing Compound A (A (Aloe), A-SA (Company)) generally exhibit lower hyphae levels than their Compound B counterparts (B (Aloe), B-SA (Company)), suggesting Compound A is the more effective inhibitor. Lastly, the Whole Aloe Extract group demonstrates a superior inhibitory effect, with all replicates at or near 0% formation, which visually distinguishes it as the most potent inhibitor and provides clear initial support for Hypothesis 3.
+
+
+### Interaction Check for Hypothesis 2
+
+Further exploratory analysis was conducted on the six component-based treatments to investigate the factorial effects of `Source` and `Combo`. 
+
+```{r H2_summarytable, echo=FALSE, message=FALSE}
+# A/B/AB × Source interaction (replicate-level) 
+# Keep only the 6 factorial-core groups via a simple dictionary
+map <- tibble::tribble(
+  ~treatment,                                      ~Source, ~Combo,
+  "compound 'A' isolated from Aloe arborescens",   "Aloe",  "A",
+  "compound 'A-SA' from Sigma Aldrich",            "SA",    "A",
+  "compound 'B' isolated from Aloe arborescens",   "Aloe",  "B",
+  "compound 'B-SA' from Sigma Aldrich",            "SA",    "B",
+  "combination of A and B",                        "Aloe",  "AB",
+  "combination of A-SA and B-SA",                  "SA",    "AB"
+)
+
+df_core <- dat %>%
+  mutate(treatment = str_squish(as.character(treatment))) %>%
+  inner_join(map, by = "treatment") %>%
+  mutate(Source = factor(Source, levels = c("Aloe","SA")),
+         Combo  = factor(Combo,  levels = c("A","B","AB")))
+
+# Summaries by Source × Combo (replicate-level proportions)
+summ_core <- df_core %>%
+  group_by(Source, Combo) %>%
+  summarise(
+    mean_prop = mean(hyphae_prop),
+    sd_prop   = sd(hyphae_prop),
+    min_prop  = min(hyphae_prop),
+    max_prop  = max(hyphae_prop),
+    .groups   = "drop"
+  )
+
+# pretty table for Source × Combo
+summ_core %>%
+  mutate(across(ends_with("prop"), ~sprintf("%.3f", .))) %>%
+  kable(caption = "Table2: Summary of Hyphae Proportion by Source × Combo (replicate-level)",
+        col.names = c("Source","Combo","Mean","SD","Min","Max"),
+        align = "l") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+
+```{r H2_interaction_plot, echo=FALSE, message=FALSE, fig.width=7, fig.height=5}
+# Interaction plot: lines by Source, x = Combo, y = mean ± SD
+plot_core <- summ_core %>%
+  mutate(mean_pct = 100 * mean_prop, sd_pct = 100 * sd_prop)
+
+p_interact <- ggplot(plot_core, aes(x = Combo, y = mean_pct, color = Source, group = Source)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.5) +
+  geom_errorbar(aes(ymin = mean_pct - sd_pct, ymax = mean_pct + sd_pct), width = 0.12) +
+  labs(x = NULL, y = "Hyphae % (Mean ± SD)",
+       title = "Figure 3: A/B/AB × Source interaction (replicate-level)") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0))
+print(p_interact)
+
+```
+
+Table 2 provides the summary statistics for each of the six `Source x Combo` groups, and Figure 5 visualizes these means as an interaction plot.
+
+In Figure 3, the data illustrates two important findings. First, component A appears to be the primary driver of inhibition (compared to B). Second, component B shows significant inconsistency in controlling growth.
+
+This inconsistency is visualized by the non-parallel lines of the 'Aloe' and 'SA' sources, which strongly suggest a statistical interaction between Source and Combo. Specifically, the effect of the source appears to be conditional on the chemical component:
+
+- For component **B**, the SA source resulted in a substantially higher mean hyphae proportion (0.249) compared to the Aloe source (0.174).\
+- Conversely, for components **A** and **AB**, the difference between the SA and Aloe sources was minimal, with SA yielding slightly lower or comparable proportions.
+
+
+## Model Fitting and Hypothesis Testing
+
+After fitting the initial Poisson GLM, the dispersion ratio was calculated to assess overdispersion.
+
+```{r poisson_model, echo=FALSE, message=FALSE}
+dat_poi <- plot_df2 
+
+# Poisson fit
+pois_mod <- glm(hyphae_count ~ treatment,
+                family = poisson(link = "log"),
+                offset = log(total_cells),
+                data = dat_poi)
+# Overdispersion 
+disp_ratio <- with(pois_mod, deviance / df.residual)
+# show dispersion ratio 
+disp_table <- data.frame(
+  Model = "Poisson GLM",
+  Dispersion_Ratio = round(disp_ratio, 3)
+)
+
+kableExtra::kbl(disp_table, caption = "Table 3: Overdispersion Check for Poisson GLM") %>% 
+  kableExtra::kable_styling(full_width = TRUE)
+
+```
+
+From Table 3, the estimated dispersion ratio is 1.36, which is only slightly above 1 which indicates mild overdispersion thus suggeting that while the Poisson assumption of equal mean to variance is not perfectly met, the deviation is modest. This implies that the Poisson GLM provides a reasonable fit, but we may obtain more conservative standard errors by refitting with a quasi-Poisson GLM.
+
+### Quasi-Poisson Model and Estimated Marginal Means
+
+```{r quasi_poisson_model, echo=FALSE, message=FALSE}
+# Quasi-Poisson 
+qpois_mod <- glm(hyphae_count ~ treatment,
+                 family = quasipoisson(link = "log"),
+                 offset = log(total_cells),
+                 data = dat_poi)
+#summary(qpois_mod)
+# EMMs on the quasi-Poisson fit 
+emm_resp <- summary(emmeans(qpois_mod, ~ treatment), type = "response") %>% 
+  as.data.frame()
+#emm_resp
+
+emm_rate <- emm_resp %>% 
+  mutate(
+    rate_per_cell = rate / 200,
+    LCL_rate = asymp.LCL / 200,
+    UCL_rate = asymp.UCL / 200
+  ) %>%
+  dplyr::select(treatment, rate_per_cell, LCL_rate, UCL_rate) %>%
+  rename(
+    Treatment = treatment,
+    `Expected Hyphae per Cell` = rate_per_cell,
+    `95% Lower Confidence Limit` = LCL_rate,
+    `95% Upper Confidence Limit` = UCL_rate
+  )
+emm_rate %>%
+  kable(caption = "Table 4: Estimated Marginal Means for Hyphae Formation Rate (per cell) by Treatment",
+        align = "l") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+Table 4 presents the Estimated Marginal Means (EMMs) for the hyphae formation rate per cell, adjusted for the model structure and the 200 cell offset. This EMM represents the expected number of hyphae forming per Candida albicans cell for each treatment.
+
+The No Treatment (Control) group had an estimated rate of 0.85 (95% CI: 0.786 to 0.919). In sharp contrast, the 0.2 $\mu$m filtered whole extract group demonstrated a substantial reduction, with an expected rate of just 0.03 (95% CI: 0.020 to 0.045).
+
+### Hypothesis 1: Treatment vs. Control
+
+Table 5 summarizes the results of Hypothesis 1, which tested whether each of the seven treatment groups exhibited a significantly lower hyphae formation rate compared to the No Treatment (Control) group.
+
+```{r h1_test, echo=FALSE}
+## H1: each treatment vs Control (one-sided Dunnett)
+emm_trt <- emmeans(qpois_mod, ~ treatment)
+h1 <- contrast(emm_trt, method = "trt.vs.ctrl", ref = "No Trt (Ctrl)")
+
+h1_rr <- summary(h1, type = "response", adjust = "dunnett",
+                 infer = TRUE, side = "less")  # one-sided (trt < ctrl)
+
+h1_df <- as.data.frame(h1_rr) %>%
+   mutate(
+    p_value = format.pval(p.value, digits = 3, eps = 0.0001, scientific = FALSE)
+  ) %>%
+  transmute(
+    Contrast = contrast,
+    `Rate Ratio (RR)` = ratio,
+    `SE` = SE,
+    `One-sided p-value (Dunnett adj.)`= p_value
+  ) 
+
+h1_df %>%
+  kable(caption = "Table 5: Hypothesis 1 - Treatment vs Control (Rate Ratios with Dunnett adjusted p-values)",
+        align = "l") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+
+```
+
+
+From the results, adjusted one-sided p-values are all less than 0.0001, indicating strong evidence that the treatments are effective in suppressing fungal morphogenesis. The key metric here is the Rate Ratio (RR), which compares the fungal growth rate in each treatment group to that of the control. An RR less than 1 indicates a reduction in growth. The Whole Aloe Extract group has an RR is 0.035 (RR = r_i/r_control = 0.03/0.85 = 0.035), meaning its fungal growth rate was only 3.5% of the control group’s rate, equivalent to a 96.5% reduction. All other treatments also showed substantial reductions, with RR values ranging from 0.114 to 0.293, translating to 77- 89% lower hyphae formation than the control.  This suggests that Aloe-derived compounds may have potent antifungal properties worth further exploration.
+
+
+### Hypothesis 2: Main Effect of Component (A vs. B)
+
+Table 6 summarizes the results of Hypothesis 2, which tested the main effect of Component A versus Component B by averaging across the Source factor (Aloe vs. Sigma Aldrich).
+
+```{r h2_test, echo=FALSE}
+## H2: Component A avg vs B avg
+emm_trt <- emmeans(qpois_mod, "treatment")
+# Custom contrast weights for A vs B averaging over Source
+levs  <- levels(emm_trt)$treatment
+w <- setNames(rep(0, length(levs)), levs)
+w["A (Aloe)"] <-  0.5
+w["A-SA (Company)"] <-  0.5
+w["B (Aloe)"] <- -0.5
+w["B-SA (Company)"] <- -0.5
+
+h2 <- contrast(emm_trt, list("A(avg) - B(avg)" = w))
+h2_rr <- summary(h2, type = "response",
+                 infer = TRUE, side = "less")  # A < B (RR < 1)
+
+h2_df <- as.data.frame(h2_rr) %>%
+  mutate(
+    p_value = format.pval(p.value, digits = 3, eps = 0.0001, scientific = FALSE)
+  ) %>%
+  transmute(
+    Contrast = contrast,
+    `Rate Ratio (RR)` = ratio,
+    `SE` = SE,
+    `One-sided p-value` = p_value
+  )
+h2_df %>%
+  kable(caption = "Table 6: Hypothesis 2 - Main Effect of Component A vs B (Rate Ratio with one-sided p-value)",
+        align = "l") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+
+```
+
+
+The Rate Ratio (RR) of 0.625 indicates that, on average, fungal growth in the Component A group was 62.5% of the growth observed in the Component B group. Thus Component A led to a 37.5% reduction in hyphae formation compared to Component B. This difference is statistically significant, with a one-sided p-value < 0.0001, suggesting strong evidence that Component A is more effective than Component B in suppressing fungal morphogenesis across both sources.
+
+
+
+### Hypothesis 3: Extract vs. Other Treatments
+
+Table 7 summarizes the results of Hypothesis 3, which tested whether the 0.2 μm filtered Aloe arborescens whole extract achieved a significantly lower hyphae formation rate compared to each of the other six treatment groups.
+
+```{r h3_test, echo=FALSE}
+## H3: each trt group vs Extract 
+emm_trt <- emmeans(qpois_mod, ~ treatment)
+levs  <- levels(emm_trt)$treatment
+ref   <- "Whole Aloe Extract"
+ctrl  <- "No Trt (Ctrl)"
+
+keep  <- setdiff(levs, c(ref, ctrl))
+
+H3_list <- setNames(lapply(keep, function(g){
+  v <- rep(0, length(levs)); names(v) <- levs
+  v[g]  <-  1
+  v[ref] <- -1
+  v
+}), paste0(keep, " / ", ref))
+
+# Estimate RRs (response scale) with one-sided Dunnett adjustment (other trts > Extract)
+h3_rr <- summary(
+  contrast(emm_trt, method = H3_list),
+  type   = "response",
+  adjust = "dunnett",
+  infer  = TRUE,
+  side   = "greater"
+)
+
+# 4) Pretty table (scientific p-values; robust to z.ratio/t.ratio naming)
+h3_df <- as.data.frame(h3_rr) %>%
+  mutate(p_value = format.pval(p.value, digits = 3, eps = 0.0001, scientific = FALSE)) %>%
+  transmute(
+    Contrast = contrast,
+    `Rate Ratio (RR)` = ratio,
+    `SE` = SE,
+    `One-sided p-value (Dunnett adj.)`= p_value
+  )
+
+kbl(h3_df,
+    caption = "Table 7: Other Treatments vs Extract (Rate Ratios, 95% CI, Dunnett-adjusted one-sided p-values)",
+    align = "l") %>% 
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+
+The Rate Ratio (RR) compares the fungal growth rate in each alternative treatment group to that of the whole aloe extract. An RR greater than 1 indicates that the alternative treatment resulted in more fungal growth than the whole extract. The RR for A (Aloe) is 4.7, meaning it produced nearly 4.7 times the hyphae formation rate compared to the whole aloe extract. Similarly, B-SA (Company) had the highest RR of 8.3, indicating it was over 8 times less effective than the whole aloe extract. All comparisons are statistically significant (one-sided p < 0.0001), strongly supporting the conclusion that the filtered whole aloe extract is substantially more potent in suppressing fungal morphogenesis than any of the individual or combined components tested.
+
+
+
+# Conclusions
+
+Based on the statistical analysis, our study successfully answered the three core research objectives. The results provide clear, actionable insights into the effectiveness of the different treatments against hyphae formation.
+
+Here are the key findings:
+
+**1. All Tested Treatments Were Effective.**
+
+Every single experimental treatment, including the isolated components and the mixtures, demonstrated a significant and substantial ability to stop fungal growth when compared to the untreated control group.
+
+**2. Component 'A' is More Powerful Than Component 'B'.**
+
+When comparing the two primary compounds, Component 'A' (from both sources: Aloe and Company) was clearly more effective at inhibiting fungal growth. On average, treatments using Component 'A' provided a 37.5% greater reduction in growth than treatments using Component 'B'.
+
+**3. The Filtered Whole Extract is By Far the Most Potent Solution.**
+
+The 0.2 µm filtered Whole Aloe Extract was overwhelmingly the most powerful inhibitor tested. This treatment achieved a 96.5% reduction in growth compared to the control, almost completely stopping hyphae formation. Its performance was statistically superior to all other individual or combined components.
+
+
+
+# References
+
+1. Hughes, M. (2025, October 27). Practicum in Data Analysis. STA660,
+    Miami University. <https://miamioh.instructure.com/courses/237421/assignments/3165607?module_item_id=6017380>
+    
+2. Lee, Marcia. Activity of Plant-Origin Compounds on Fungal Morphogenesis. <https://miamioh.instructure.com/courses/237421/assignments/3165607?module_item_id=6017380>
+    
+3. van Burik JA, Magee PT. Aspects of fungal pathogenesis in humans. Annu Rev Microbiol. 2001;55:743-72. doi: 10.1146/annurev.micro.55.1.743. PMID: 11544373.
+
+4. Montgomery, D. C. (2017). Design and analysis of experiments (9th ed.). Wiley.
+
+5. Chou TC. Theoretical basis, experimental design, and computerized simulation of synergism and antagonism in drug combination studies. Pharmacol Rev. 2006 Sep;58(3):621-81. doi: 10.1124/pr.58.3.10. Erratum in: Pharmacol Rev. 2007 Mar;59(1):124. PMID: 16968952.
+
+6. McCullagh, P., & Nelder, J. A. (1989). Generalized Linear Models (2nd ed.). Chapman and Hall/CRC.
+
+7. Ver Hoef, J. M., & Boveng, P. L. (2007). Quasi-Poisson vs. negative binomial regression: how should we model overdispersed count data?. Ecology, 88(11), 2766-2772.
+
+8. R Core Team (2024). R: A Language and Environment for Statistical Computing. R Foundation for Statistical Computing, Vienna, Austria. URL <https://www.R-project.org/>.
+
+9. Posit team (2024). RStudio: Integrated Development Environment for R. Posit Software, PBC, Boston, MA. URL <http://www.posit.co/>.
+
+10. Wickham H, Averick M, Bryan J, Chang W, McGowan LD, François R, Grolemund G, Hayes A, Henry L, Hester J, Kuhn M, Pedersen TL, Miller E, Bache SM, Müller K, Ooms J, Robinson D, Seidel DP, Spinu V, Takahashi K, Vaughan D, Wilke C, Woo K, Yutani H (2019). "Welcome to the tidyverse." Journal of Open Source Software, 4(43), 1686. doi: 10.21105/joss.01686.
+
+11. Wickham H (2016). ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York. ISBN 978-3-319-24277-4. URL <https://ggplot2.tidyverse.org>.
+
+12. Wickham H, François R, Henry L, Müller K (2023). dplyr: A Grammar of Data Manipulation. R package version 1.1.4. URL <https://dplyr.tidyverse.org>.
+
+13. Wickham H, Hester J, Bryan J (2024). readr: Read Rectangular Text Data. R package version 2.1.5. URL <https://readr.tidyverse.org>.
+
+14. Venables, W. N. & Ripley, B. D. (2002). Modern Applied Statistics with S. Fourth Edition. Springer, New York. ISBN 0-387-95457-0.
+
+15. Lenth, R. V. (2023). "emmeans: An R package for computing estimated marginal means." Journal of Statistical Software, 107(9), 1-36. doi: 10.18637/jss.v107.i09.
+
+16. Zeileis A (2004). "Econometric Computing with HC and HAC Covariance Matrix Estimators." Journal of Statistical Software, 11(10), 1-17. doi: 10.18637/jss.v011.i10.
+
+17. Xie Y (2015). Dynamic Documents with R and knitr. 2nd edition. Chapman and Hall/CRC. ISBN 978-1498716963. URL <https://yihui.org/knitr/>.
+
+18. Zhu H (2021). kableExtra: Construct Complex Table with 'kable' and Pipe Syntax. R package version 1.3.4. URL <https://CRAN.R-project.org/package=kableExtra>.
+
+19. Firke S (2024). janitor: Simple Tools for Examining and Cleaning Dirty Data. R package version 2.2.0. URL <https://github.com/sfirke/janitor>.
+
+
+
+
+# Appendix
+
+## Alternative Approach
+
+### $2^3$ Factorial Design
+
+As an alternative to the one-way treatment comparison, the dataset can also be conceptualized as a **$2^3$ factorial design**. This structure focuses on the six treatments derived from combinations of three factors, each at two levels.
+
+Table 8: Factorial Design Structure
+
+| Factor | Levels | Description |
+|--------|---------|-------------|
+| **Compound A** | Present / Absent | Whether compound A was included in the treatment |
+| **Compound B** | Present / Absent | Whether compound B was included in the treatment |
+| **Source** | Isolated (Aloe) / Commercial (Sigma-Aldrich) | Origin of the compound used |
+
+This structure represents the six experimental treatments that are combinations of A, B, and Source (A_Aloe, B_Aloe, A+B_Aloe, A_SA, B_SA, A+B_SA). 
+
+The *Whole Aloe arborescens extract* treatment does not fit neatly into this factorial structure and will therefore be analyzed separately as a complex mixture rather than a single factor level.
+
+
+#### Purpose of the factorial model
+
+The factorial representation provides a structured way to:
+
+- Estimate the **main effects** of compounds A, B, and compound source (Aloe vs. Sigma).\
+- Evaluate potential **interactions** among these factors ("Does the effect of Compound A depend on the presence of Compound B?" or "Does the Source modify the effect of Compound A?").
+
+
+#### Analytical steps
+
+1. **Model specification:**\
+A **binomial generalized linear model (GLM)** will be fitted to this 6-group subset. The model will include all main effects and interaction terms:
+
+$$
+\text{logit}(p) = \beta_0 + \beta_1 \cdot A + \beta_2 \cdot B + \beta_3 \cdot S + \beta_4 \cdot (A \times B) + \beta_5 \cdot (A \times S) + \beta_6 \cdot (B \times S) + \beta_7 \cdot (A \times B \times S)\tag{6}
+$$
+
+Where:
+
+  - $A$: Indicator variable for the presence of compound A (1 = present, 0 = absent)\
+  - $B$: Indicator variable for the presence of compound B (1 = present, 0 = absent)\
+  - $S$: Indicator variable for the source (1 = Sigma-Aldrich, 0 = Aloe)
+
+
+2. **Hypothesis Testing:**\
+An Analysis of Deviance (Type III) will test the significance of main effects and all two-way and three-way interaction terms.
+
+3. **Effect Size Interpretation:**\
+Model coefficients will be converted to odds ratios (OR) and predicted probabilities to quantify effects in biologically meaningful terms (e.g., "The presence of compound A reduced the odds of hyphae formation by X%").
+
+4. **Handling Excluded treatments:**\
+The Control and Extract groups will be compared separately to the factorial model's predictions or to specific combinations within it (e.g., comparing Extract to the A+B_Aloe group).
+
+5. **Model diagnostics:**\
+As with the priminarly analysis, we will check for **overdispersion**. If extra-binomial variability is detected, use a **quasi-binomial model** to adjust standard errors.
+
+
+#### Limitations and considerations
+
+- **Exclusion of Control and Extract groups:**\
+This approach is more focusing on the effects of compounds A, B, Source and their interactions, rather than direct treatment comparisons. Therefore, it may not directly address all original hypotheses.
+  
+- **Limited power for interactions:**\
+With five replicates per group, the power to detect higher order interactions is very limited. These terms will be considered exploratory.
+
+- **Complexity of interpretation:**\
+A significant three-way interaction can be statistically complex and difficult to interpret biologically.
+
+- **Model assumptions:**\
+Factorial analysis assumes independent replicates and binomially distributed counts. Deviations such as overdispersion may inflate error rates if not corrected.
+
+
+
+## Comparison of Analytical Approaches
+
+### One-Way Treatment Comparison
+
+The primary one-way GLM provides the most direct and statistically powerful answers to the core efficacy questions (H1: vs. Control; H3: vs. Extract). Its strength is its clarity in addressing these pre-specified comparisons. However, this approach is inefficient as it ignores the inherent factorial structure of six treatments, thus offering no mechanistic insight into why combinations work or whether synergy exists.
+
+### $2^3$ Factorial Design 
+
+Conversely, the $2^3$ factorial analysis provides this mechanistic insight by modeling how the components (A, B, Source) interact. Its strength is efficiency and the ability to test for synergy. Its primary limitations are the necessary exclusion of the Control and Extract benchmarks and lower statistical power for detecting interactions, which should be treated as exploratory.
+
+### Conclusion
+
+Overall, the one-way treatment comparison is better for answering the primary efficacy questions directly, while the factorial design provides deeper mechanistic insights into how the compounds work together. However, given the limited sample size, the one-way approach is likely more reliable for definitive conclusions.
+
+## Formula for Mean Count Calculation
+
+$$
+\mu_i = n_i \times \exp(\eta_i)\
+= 200 \times \exp(\eta_i)
+= 200 \times \exp(\beta_0 + \beta_i)\tag{1a}
+$$
+
+Where:
+
+- $\mu_i$: Expected hyphae count for treatment group $i$\
+- $n_i$: Total cells observed per replicate (200)\
+- $\eta_i$: Linear predictor for treatment group $i$\
+- $\beta_0$: Intercept term (log rate for reference group)\
+- $\beta_i$: Coefficient for treatment group $i$ 
+
+## Negative Binomial GLM
+
+As a fully parametric alternative, a Negative Binomial (NB) GLM is also considered. The NB distribution is explicitly designed for overdispersed count data. It is often preferred if the variance is observed to increase quadratically with the mean.While it uses the same log link and offset structure for the mean:
+
+$$
+\log(E[Y_i]) = \mu_i = \eta_i + \log(n_i)
+$$
+
+It defines the variance as a quadratic function of the mean, introducing a separate dispersion parameter $\theta$:
+
+$$
+\text{Var}(Y_i) = \mu_i + \frac{\mu_i^2}{\theta}
+$$
+
+As $\theta$ approaches infinity, the NB converges to the standard Poisson model. Smaller values of $\theta$ indicate greater overdispersion.
+
+```{r negative_binomial_model, echo=FALSE, message=FALSE,warning=FALSE}
+nb_mod <- glm.nb(hyphae_count ~ treatment + offset(log(total_cells)), data = dat_poi)
+aic_tbl <- data.frame(
+  Model = c("Poisson","NegBin"),
+  AIC   = c(AIC(pois_mod), AIC(nb_mod)),
+  BIC   = c(BIC(pois_mod), BIC(nb_mod))
+)
+# Dispersion for NB model
+disp_ratio_nb <- with(nb_mod, deviance / df.residual)
+aic_tbl$Dispersion_Ratio <- c(disp_ratio, disp_ratio_nb)
+
+
+# show AIC/BIC and dispersion tables
+kableExtra::kbl(aic_tbl, caption = "Table 9: Model Comparison: AIC, BIC, and Dispersion Ratios") %>% 
+  kableExtra::kable_styling(full_width = TRUE)
+```
+
+
+
+
+
+
